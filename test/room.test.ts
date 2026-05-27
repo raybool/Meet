@@ -66,6 +66,53 @@ describe("room participant selection", () => {
     });
   });
 
+  it("allows the current participant while their own presence enter is still propagating", () => {
+    expect(
+      selectRoomParticipant([{ clientId: "host", joinedAt: 1 }], "guest"),
+    ).toEqual({
+      state: "active",
+      role: "guest",
+      peerId: "host",
+      participantIds: ["host", "guest"],
+    });
+  });
+
+  it("marks the current participant as full when two other people are already active", () => {
+    expect(
+      selectRoomParticipant(
+        [
+          { clientId: "host", joinedAt: 1 },
+          { clientId: "guest", joinedAt: 2 },
+        ],
+        "third",
+      ),
+    ).toEqual({
+      state: "full",
+      role: null,
+      peerId: null,
+      participantIds: ["host", "guest", "third"],
+    });
+  });
+
+  it("ignores stale participants before deciding the room is full", () => {
+    expect(
+      selectRoomParticipant(
+        [
+          { clientId: "old-host", joinedAt: 1_000, lastSeenAt: 1_000 },
+          { clientId: "host", joinedAt: 100_000, lastSeenAt: 100_000 },
+          { clientId: "guest", joinedAt: 101_000, lastSeenAt: 101_000 },
+        ],
+        "guest",
+        { now: 101_000, activeMemberTtlMs: 45_000 },
+      ),
+    ).toEqual({
+      state: "active",
+      role: "guest",
+      peerId: "host",
+      participantIds: ["host", "guest"],
+    });
+  });
+
   it("normalizes duplicate members by earliest join time", () => {
     expect(
       normalizeMembers([

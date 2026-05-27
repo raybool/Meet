@@ -14,6 +14,7 @@ import {
   VideoOff,
 } from "lucide-react";
 import {
+  ACTIVE_MEMBER_TTL_MS,
   type RoomRole,
   selectRoomParticipant,
 } from "@/lib/room";
@@ -67,6 +68,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const clientIdRef = useRef<string | null>(null);
   const readySentToPeerRef = useRef<string | null>(null);
   const offerCreatedForPeerRef = useRef<string | null>(null);
+  const presenceHeartbeatRef = useRef<number | null>(null);
   const isJoiningRef = useRef(false);
 
   useEffect(() => {
@@ -129,7 +131,28 @@ export function RoomClient({ roomId }: { roomId: string }) {
     setLocalStream(null);
   }, []);
 
+  const stopPresenceHeartbeat = useCallback(() => {
+    if (presenceHeartbeatRef.current) {
+      window.clearInterval(presenceHeartbeatRef.current);
+      presenceHeartbeatRef.current = null;
+    }
+  }, []);
+
+  const startPresenceHeartbeat = useCallback(
+    (channel: AblyChannel, joinedAt: number) => {
+      stopPresenceHeartbeat();
+      presenceHeartbeatRef.current = window.setInterval(() => {
+        void channel.presence.update({
+          joinedAt,
+          lastSeenAt: Date.now(),
+        });
+      }, 10_000);
+    },
+    [stopPresenceHeartbeat],
+  );
+
   const cleanupResourcesSilently = useCallback(() => {
+    stopPresenceHeartbeat();
     channelRef.current?.unsubscribe();
     channelRef.current?.presence.unsubscribe();
     ablyRef.current?.close();
@@ -144,7 +167,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       track.stop();
     });
     localStreamRef.current = null;
-  }, []);
+  }, [stopPresenceHeartbeat]);
 
   const getPeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
@@ -296,8 +319,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
       members.map((member) => ({
         clientId: member.clientId,
         joinedAt: readJoinedAt(member.data),
+        lastSeenAt: readLastSeenAt(member.data),
       })),
       currentClientId,
+      { activeMemberTtlMs: ACTIVE_MEMBER_TTL_MS },
     );
 
     setParticipantCount(Math.min(selection.participantIds.length, 2));
@@ -405,9 +430,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
         void refreshPresence();
       });
 
+      const joinedAt = Date.now();
       await channel.presence.enter({
-        joinedAt: Date.now(),
+        joinedAt,
+        lastSeenAt: joinedAt,
       });
+      startPresenceHeartbeat(channel, joinedAt);
       await refreshPresence();
     } catch (joinError) {
       setError(toErrorMessage(joinError));
@@ -428,11 +456,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
     handleSignal,
     refreshPresence,
     roomId,
+    startPresenceHeartbeat,
     stopLocalMedia,
   ]);
 
   const leaveRoom = useCallback(async () => {
     const currentClientId = clientIdRef.current;
+
+    stopPresenceHeartbeat();
 
     if (currentClientId) {
       await publishSignal({
@@ -458,7 +489,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
     setPeerId(null);
     setParticipantCount(0);
     setStatus("left");
-  }, [closePeerConnection, publishSignal, stopLocalMedia]);
+  }, [closePeerConnection, publishSignal, stopLocalMedia, stopPresenceHeartbeat]);
 
   const reconnectRoom = useCallback(async () => {
     await leaveRoom();
@@ -762,7 +793,22 @@ function readJoinedAt(value: unknown) {
     return data.joinedAt;
   }
 
-  return Date.now();
+  return 0;
+}
+
+function readLastSeenAt(value: unknown) {
+  const data = value as { lastSeenAt?: unknown } | null;
+
+  if (
+    data &&
+    typeof data === "object" &&
+    "lastSeenAt" in data &&
+    typeof data.lastSeenAt === "number"
+  ) {
+    return data.lastSeenAt;
+  }
+
+  return undefined;
 }
 
 async function readApiError(response: Response) {
