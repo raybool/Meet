@@ -40,6 +40,8 @@ type AblyRealtimeClient = InstanceType<typeof Ably.Realtime>;
 type AblyChannel = ReturnType<AblyRealtimeClient["channels"]["get"]>;
 
 const CLIENT_ID_KEY = "meet-client-id";
+const MISSING_INVITE_TOKEN_MESSAGE =
+  "Invite token is missing. Create a new room and use the full invite link.";
 
 export function RoomClient({
   inviteToken,
@@ -48,16 +50,18 @@ export function RoomClient({
   inviteToken: string;
   roomId: string;
 }) {
-  const [clientId, setClientId] = useState<string | null>(null);
-  const [status, setStatus] = useState<CallStatus>("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<CallStatus>(() =>
+    inviteToken ? "idle" : "error",
+  );
+  const [error, setError] = useState<string | null>(() =>
+    inviteToken ? null : MISSING_INVITE_TOKEN_MESSAGE,
+  );
   const [copied, setCopied] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [role, setRole] = useState<RoomRole | null>(null);
   const [peerId, setPeerId] = useState<string | null>(null);
   const [participantCount, setParticipantCount] = useState(0);
-  const [inviteUrl, setInviteUrl] = useState("");
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
@@ -76,31 +80,7 @@ export function RoomClient({
   const offerCreatedForPeerRef = useRef<string | null>(null);
   const presenceHeartbeatRef = useRef<number | null>(null);
   const isJoiningRef = useRef(false);
-
-  useEffect(() => {
-    const nextClientId = getOrCreateClientId();
-    clientIdRef.current = nextClientId;
-    setClientId(nextClientId);
-  }, []);
-
-  useEffect(() => {
-    const nextInviteUrl = new URL(`/room/${roomId}`, window.location.origin);
-
-    if (inviteToken) {
-      nextInviteUrl.searchParams.set("token", inviteToken);
-    }
-
-    setInviteUrl(nextInviteUrl.toString());
-  }, [inviteToken, roomId]);
-
-  useEffect(() => {
-    if (!inviteToken) {
-      setError(
-        "Invite token is missing. Create a new room and use the full invite link.",
-      );
-      setStatus("error");
-    }
-  }, [inviteToken]);
+  const invitePath = getInvitePath(roomId, inviteToken);
 
   useEffect(() => {
     if (localVideoRef.current) {
@@ -392,10 +372,12 @@ export function RoomClient({
   }, [closePeerConnection, publishSignal, stopLocalMedia]);
 
   const joinRoom = useCallback(async () => {
-    if (!clientId || !inviteToken || isJoiningRef.current) {
+    if (!inviteToken || isJoiningRef.current) {
       return;
     }
 
+    const currentClientId = clientIdRef.current ?? getOrCreateClientId();
+    clientIdRef.current = currentClientId;
     isJoiningRef.current = true;
     setError(null);
     setStatus("media");
@@ -417,7 +399,7 @@ export function RoomClient({
 
       const iceResponse = await fetch(
         `/api/ice?roomId=${encodeURIComponent(roomId)}&clientId=${encodeURIComponent(
-          clientId,
+          currentClientId,
         )}&token=${encodeURIComponent(inviteToken)}`,
         { cache: "no-store" },
       );
@@ -432,11 +414,11 @@ export function RoomClient({
       const realtime = new Ably.Realtime({
         authUrl: `/api/ably-token?roomId=${encodeURIComponent(
           roomId,
-        )}&clientId=${encodeURIComponent(clientId)}&token=${encodeURIComponent(
-          inviteToken,
-        )}`,
+        )}&clientId=${encodeURIComponent(
+          currentClientId,
+        )}&token=${encodeURIComponent(inviteToken)}`,
         authMethod: "GET",
-        clientId,
+        clientId: currentClientId,
       });
 
       ablyRef.current = realtime;
@@ -446,7 +428,10 @@ export function RoomClient({
       channelRef.current = channel;
 
       await channel.subscribe("signal", (ablyMessage) => {
-        if (isSignalMessage(ablyMessage.data)) {
+        if (
+          isSignalMessage(ablyMessage.data) &&
+          ablyMessage.clientId === ablyMessage.data.senderId
+        ) {
           void handleSignal(ablyMessage.data);
         }
       });
@@ -476,7 +461,6 @@ export function RoomClient({
       isJoiningRef.current = false;
     }
   }, [
-    clientId,
     closePeerConnection,
     handleSignal,
     inviteToken,
@@ -530,11 +514,12 @@ export function RoomClient({
   }, [cleanupResourcesSilently]);
 
   async function copyInvite() {
-    if (!inviteUrl) {
+    if (!inviteToken) {
       return;
     }
 
     try {
+      const inviteUrl = new URL(invitePath, window.location.origin).toString();
       await navigator.clipboard.writeText(inviteUrl);
       setError(null);
       setCopied(true);
@@ -584,7 +569,7 @@ export function RoomClient({
               {copied ? "Copied" : "Copy link"}
             </button>
             <a
-              href={inviteUrl}
+              href={invitePath}
               className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
               title="Open invite link"
             >
@@ -674,7 +659,7 @@ export function RoomClient({
                 <button
                   type="button"
                   onClick={joinRoom}
-                  disabled={!clientId || !inviteToken}
+                  disabled={!inviteToken}
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[8px] bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
                 >
                   <Video aria-hidden="true" className="h-5 w-5" />
@@ -805,6 +790,17 @@ function getOrCreateClientId() {
   const clientId = crypto.randomUUID();
   window.sessionStorage.setItem(CLIENT_ID_KEY, clientId);
   return clientId;
+}
+
+function getInvitePath(roomId: string, inviteToken: string) {
+  const params = new URLSearchParams();
+
+  if (inviteToken) {
+    params.set("token", inviteToken);
+  }
+
+  const query = params.toString();
+  return query ? `/room/${roomId}?${query}` : `/room/${roomId}`;
 }
 
 function readJoinedAt(value: unknown) {
