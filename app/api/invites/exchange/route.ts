@@ -1,27 +1,24 @@
-import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   createRoomAccessToken,
   getRoomAccessCookieName,
   getRoomAccessCookieOptions,
 } from "@/lib/access";
+import { exchangeInviteCode } from "@/lib/invite-code";
 import { enforceRateLimits, getClientIp } from "@/lib/rate-limit";
+import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   const signingSecret = process.env.INVITE_SIGNING_SECRET;
+  const redis = getRedis();
 
-  if (!signingSecret) {
-    return jsonError("Service temporarily unavailable", 500);
-  }
-
-  const clientIp = getClientIp(request);
   const rateLimitResponse = await enforceRateLimits(request, [
     {
-      identifier: clientIp,
-      limit: 10,
-      name: "rooms:ip",
+      identifier: getClientIp(request),
+      limit: 20,
+      name: "invite-exchange:ip",
       window: "1 m",
     },
   ]);
@@ -30,19 +27,30 @@ export async function POST(request: NextRequest) {
     return rateLimitResponse;
   }
 
-  const roomId = randomUUID();
+  if (!signingSecret || !redis) {
+    return jsonError("Service temporarily unavailable", 500);
+  }
+
+  const code = await readInviteCode(request);
+
+  if (!code) {
+    return jsonError("Invalid invite link", 401);
+  }
+
+  const exchange = await exchangeInviteCode({ redis, code });
+
+  if (!exchange.ok) {
+    return jsonError("Invalid invite link", 401);
+  }
+
   const token = createRoomAccessToken({
-    roomId,
+    roomId: exchange.roomId,
     secret: signingSecret,
   });
-  const roomPath = `/room/${roomId}`;
-  const inviteUrl = new URL(roomPath, request.url);
-
+  const roomPath = `/room/${exchange.roomId}`;
   const response = NextResponse.json(
     {
-      roomId,
       roomPath,
-      inviteUrl: inviteUrl.toString(),
     },
     {
       headers: {
@@ -50,13 +58,23 @@ export async function POST(request: NextRequest) {
       },
     },
   );
+
   response.cookies.set(
-    getRoomAccessCookieName(roomId),
+    getRoomAccessCookieName(exchange.roomId),
     token,
     getRoomAccessCookieOptions(),
   );
 
   return response;
+}
+
+async function readInviteCode(request: NextRequest) {
+  try {
+    const body = (await request.json()) as { code?: unknown };
+    return typeof body.code === "string" ? body.code : null;
+  } catch {
+    return null;
+  }
 }
 
 function jsonError(error: string, status: number) {

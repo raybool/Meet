@@ -4,7 +4,11 @@ import {
   generateTurnCredentials,
   parseUrlList,
 } from "@/lib/turn";
-import { ROOM_ID_PATTERN, validateRoomAccess } from "@/lib/access";
+import {
+  ROOM_ID_PATTERN,
+  readRoomAccessCookie,
+  validateRoomAccess,
+} from "@/lib/access";
 import { enforceRateLimits, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -15,7 +19,10 @@ const TURN_CREDENTIAL_TTL_SECONDS = 10 * 60;
 export async function GET(request: NextRequest) {
   const roomId = request.nextUrl.searchParams.get("roomId");
   const clientId = request.nextUrl.searchParams.get("clientId");
-  const token = request.nextUrl.searchParams.get("token");
+  const token = readRoomAccessCookie({
+    cookies: request.cookies,
+    roomId,
+  });
   const turnUrls = parseUrlList(process.env.TURN_URLS);
   const stunUrls = parseUrlList(process.env.STUN_URLS, DEFAULT_STUN_URLS);
   const sharedSecret = process.env.TURN_SHARED_SECRET;

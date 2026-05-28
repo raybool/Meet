@@ -1,6 +1,7 @@
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
+import { getRedis } from "./redis";
 
 type RateLimitWindow = Parameters<typeof Ratelimit.slidingWindow>[1];
 
@@ -12,8 +13,6 @@ type RateLimitRule = {
 };
 
 const limiters = new Map<string, Ratelimit>();
-
-let redis: Redis | null = null;
 
 export async function enforceRateLimits(
   request: NextRequest,
@@ -60,22 +59,6 @@ export function getClientIp(request: NextRequest) {
   }
 
   return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
-function getRedis() {
-  if (redis) {
-    return redis;
-  }
-
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (!url || !token) {
-    return null;
-  }
-
-  redis = new Redis({ url, token });
-  return redis;
 }
 
 function getLimiter(redisClient: Redis, rule: RateLimitRule) {

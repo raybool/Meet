@@ -1,17 +1,27 @@
+import { cookies } from "next/headers";
 import { RoomClient } from "@/components/RoomClient";
+import {
+  readRoomAccessCookie,
+  validateRoomCookieAccess,
+} from "@/lib/access";
 
 type RoomPageProps = {
   params: Promise<{
     roomId: string;
   }>;
-  searchParams: Promise<{
-    token?: string;
-  }>;
 };
 
-export default async function RoomPage({ params, searchParams }: RoomPageProps) {
+export default async function RoomPage({ params }: RoomPageProps) {
   const { roomId } = await params;
-  const { token } = await searchParams;
+  const cookieStore = await cookies();
+  const access = validateRoomCookieAccess({
+    roomId,
+    token: readRoomAccessCookie({
+      cookies: cookieStore,
+      roomId,
+    }),
+    secret: process.env.INVITE_SIGNING_SECRET,
+  });
 
-  return <RoomClient inviteToken={token ?? ""} roomId={roomId} />;
+  return <RoomClient hasRoomAccess={access.ok} roomId={roomId} />;
 }

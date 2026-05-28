@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Ably from "ably";
-import { ROOM_ID_PATTERN, validateRoomAccess } from "@/lib/access";
+import {
+  ROOM_ID_PATTERN,
+  readRoomAccessCookie,
+  validateRoomAccess,
+} from "@/lib/access";
 import { enforceRateLimits, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -8,7 +12,10 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   const roomId = request.nextUrl.searchParams.get("roomId");
   const clientId = request.nextUrl.searchParams.get("clientId");
-  const token = request.nextUrl.searchParams.get("token");
+  const token = readRoomAccessCookie({
+    cookies: request.cookies,
+    roomId,
+  });
   const apiKey = process.env.ABLY_API_KEY;
   const signingSecret = process.env.INVITE_SIGNING_SECRET;
   const roomRateLimitKey =

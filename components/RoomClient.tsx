@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as Ably from "ably";
 import {
   Copy,
-  Link2,
   Mic,
   MicOff,
   PhoneOff,
@@ -40,21 +39,21 @@ type AblyRealtimeClient = InstanceType<typeof Ably.Realtime>;
 type AblyChannel = ReturnType<AblyRealtimeClient["channels"]["get"]>;
 
 const CLIENT_ID_KEY = "meet-client-id";
-const MISSING_INVITE_TOKEN_MESSAGE =
-  "Invite token is missing. Create a new room and use the full invite link.";
+const MISSING_ROOM_ACCESS_MESSAGE =
+  "Room access is missing or expired. Use a fresh invite link.";
 
 export function RoomClient({
-  inviteToken,
+  hasRoomAccess,
   roomId,
 }: {
-  inviteToken: string;
+  hasRoomAccess: boolean;
   roomId: string;
 }) {
   const [status, setStatus] = useState<CallStatus>(() =>
-    inviteToken ? "idle" : "error",
+    hasRoomAccess ? "idle" : "error",
   );
   const [error, setError] = useState<string | null>(() =>
-    inviteToken ? null : MISSING_INVITE_TOKEN_MESSAGE,
+    hasRoomAccess ? null : MISSING_ROOM_ACCESS_MESSAGE,
   );
   const [copied, setCopied] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
@@ -80,7 +79,6 @@ export function RoomClient({
   const offerCreatedForPeerRef = useRef<string | null>(null);
   const presenceHeartbeatRef = useRef<number | null>(null);
   const isJoiningRef = useRef(false);
-  const invitePath = getInvitePath(roomId, inviteToken);
 
   useEffect(() => {
     if (localVideoRef.current) {
@@ -372,7 +370,7 @@ export function RoomClient({
   }, [closePeerConnection, publishSignal, stopLocalMedia]);
 
   const joinRoom = useCallback(async () => {
-    if (!inviteToken || isJoiningRef.current) {
+    if (!hasRoomAccess || isJoiningRef.current) {
       return;
     }
 
@@ -400,7 +398,7 @@ export function RoomClient({
       const iceResponse = await fetch(
         `/api/ice?roomId=${encodeURIComponent(roomId)}&clientId=${encodeURIComponent(
           currentClientId,
-        )}&token=${encodeURIComponent(inviteToken)}`,
+        )}`,
         { cache: "no-store" },
       );
 
@@ -416,7 +414,7 @@ export function RoomClient({
           roomId,
         )}&clientId=${encodeURIComponent(
           currentClientId,
-        )}&token=${encodeURIComponent(inviteToken)}`,
+        )}`,
         authMethod: "GET",
         clientId: currentClientId,
       });
@@ -462,8 +460,8 @@ export function RoomClient({
     }
   }, [
     closePeerConnection,
+    hasRoomAccess,
     handleSignal,
-    inviteToken,
     refreshPresence,
     roomId,
     startPresenceHeartbeat,
@@ -514,20 +512,37 @@ export function RoomClient({
   }, [cleanupResourcesSilently]);
 
   async function copyInvite() {
-    if (!inviteToken) {
+    if (!hasRoomAccess) {
       return;
     }
 
     try {
+      const response = await fetch(
+        `/api/rooms/${encodeURIComponent(roomId)}/invites`,
+        {
+          method: "POST",
+          cache: "no-store",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response));
+      }
+
+      const { invitePath } = (await response.json()) as { invitePath: string };
       const inviteUrl = new URL(invitePath, window.location.origin).toString();
-      await navigator.clipboard.writeText(inviteUrl);
+
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+      } catch {
+        throw new Error("Clipboard permission was blocked. Please try again.");
+      }
+
       setError(null);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setError(
-        "Clipboard permission was blocked. Use the Invite link or copy the room URL from the address bar.",
-      );
+    } catch (copyError) {
+      setError(toErrorMessage(copyError));
     }
   }
 
@@ -559,24 +574,17 @@ export function RoomClient({
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={copyInvite}
-              className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
-              title="Copy invite link"
-            >
-              <Copy aria-hidden="true" className="h-4 w-4" />
-              {copied ? "Copied" : "Copy link"}
-            </button>
-            <a
-              href={invitePath}
-              className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
-              title="Open invite link"
-            >
-              <Link2 aria-hidden="true" className="h-4 w-4" />
-              Invite
-            </a>
-          </div>
+              <button
+                type="button"
+                onClick={copyInvite}
+                disabled={!hasRoomAccess}
+                className="inline-flex min-h-10 items-center gap-2 rounded-[8px] border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Copy invite link"
+              >
+                <Copy aria-hidden="true" className="h-4 w-4" />
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
         </header>
 
         <section className="grid flex-1 gap-4 lg:grid-cols-[1fr_340px]">
@@ -657,11 +665,11 @@ export function RoomClient({
               status === "error" ||
               status === "full" ? (
                 <button
-                  type="button"
-                  onClick={joinRoom}
-                  disabled={!inviteToken}
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[8px] bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
-                >
+                    type="button"
+                    onClick={joinRoom}
+                    disabled={!hasRoomAccess}
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[8px] bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
+                  >
                   <Video aria-hidden="true" className="h-5 w-5" />
                   {status === "full" ? "Try again" : "Join room"}
                 </button>
@@ -790,17 +798,6 @@ function getOrCreateClientId() {
   const clientId = crypto.randomUUID();
   window.sessionStorage.setItem(CLIENT_ID_KEY, clientId);
   return clientId;
-}
-
-function getInvitePath(roomId: string, inviteToken: string) {
-  const params = new URLSearchParams();
-
-  if (inviteToken) {
-    params.set("token", inviteToken);
-  }
-
-  const query = params.toString();
-  return query ? `/room/${roomId}?${query}` : `/room/${roomId}`;
 }
 
 function readJoinedAt(value: unknown) {

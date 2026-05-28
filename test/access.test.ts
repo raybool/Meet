@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { validateRoomAccess } from "../lib/access";
-import { createInviteToken } from "../lib/invite";
+import {
+  createRoomAccessToken,
+  getRoomAccessCookieName,
+  readRoomAccessCookie,
+  validateRoomAccess,
+  validateRoomCookieAccess,
+} from "../lib/access";
 
 const NOW = 1_700_000_000_000;
 const ROOM_ID = "eceef22f-bf5c-429c-b87c-c01b3712f928";
@@ -8,18 +13,22 @@ const CLIENT_ID = "a12f9df4-85db-4e88-a473-b6289edb5731";
 const SECRET = "test-invite-signing-secret";
 
 describe("room access validation", () => {
-  it("accepts valid room, client, and token params", () => {
-    const token = createInviteToken({
+  it("accepts valid room, client, and room cookie token", () => {
+    const token = createRoomAccessToken({
       roomId: ROOM_ID,
       secret: SECRET,
       now: () => NOW,
     });
+    const cookies = new Map([[getRoomAccessCookieName(ROOM_ID), { value: token }]]);
 
     expect(
       validateRoomAccess({
         roomId: ROOM_ID,
         clientId: CLIENT_ID,
-        token,
+        token: readRoomAccessCookie({
+          cookies,
+          roomId: ROOM_ID,
+        }),
         secret: SECRET,
         now: () => NOW,
       }),
@@ -28,10 +37,31 @@ describe("room access validation", () => {
       roomId: ROOM_ID,
       clientId: CLIENT_ID,
       token,
+      });
+  });
+
+  it("accepts room cookie access without a client id", () => {
+    const token = createRoomAccessToken({
+      roomId: ROOM_ID,
+      secret: SECRET,
+      now: () => NOW,
+    });
+
+    expect(
+      validateRoomCookieAccess({
+        roomId: ROOM_ID,
+        token,
+        secret: SECRET,
+        now: () => NOW,
+      }),
+    ).toEqual({
+      ok: true,
+      roomId: ROOM_ID,
+      token,
     });
   });
 
-  it("rejects a missing token", () => {
+  it("rejects a missing room cookie token", () => {
     expect(
       validateRoomAccess({
         roomId: ROOM_ID,
