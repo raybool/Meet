@@ -1,35 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Ably from "ably";
+import { ROOM_ID_PATTERN, validateRoomAccess } from "@/lib/access";
+import { enforceRateLimits, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
-
-const ROOM_ID_PATTERN = /^[a-zA-Z0-9_-]{8,128}$/;
-const CLIENT_ID_PATTERN = /^[a-zA-Z0-9._:-]{8,128}$/;
 
 export async function GET(request: NextRequest) {
   const roomId = request.nextUrl.searchParams.get("roomId");
   const clientId = request.nextUrl.searchParams.get("clientId");
+  const token = request.nextUrl.searchParams.get("token");
   const apiKey = process.env.ABLY_API_KEY;
+  const signingSecret = process.env.INVITE_SIGNING_SECRET;
+  const roomRateLimitKey =
+    roomId && ROOM_ID_PATTERN.test(roomId) ? roomId : "invalid-room";
 
-  if (!roomId || !ROOM_ID_PATTERN.test(roomId)) {
-    return NextResponse.json({ error: "Invalid roomId" }, { status: 400 });
-  }
+  const rateLimitResponse = await enforceRateLimits(request, [
+    {
+      identifier: getClientIp(request),
+      limit: 30,
+      name: "ably-token:ip",
+      window: "1 m",
+    },
+    {
+      identifier: roomRateLimitKey,
+      limit: 30,
+      name: "ably-token:room",
+      window: "1 m",
+    },
+  ]);
 
-  if (!clientId || !CLIENT_ID_PATTERN.test(clientId)) {
-    return NextResponse.json({ error: "Invalid clientId" }, { status: 400 });
+  if (rateLimitResponse) {
+    return rateLimitResponse;
   }
 
   if (!apiKey) {
-    return NextResponse.json(
-      { error: "ABLY_API_KEY must be configured" },
-      { status: 500 },
+    return jsonError("Service temporarily unavailable", 500);
+  }
+
+  const access = validateRoomAccess({
+    roomId,
+    clientId,
+    token,
+    secret: signingSecret,
+  });
+
+  if (!access.ok) {
+    return jsonError(
+      access.status === 400 ? "Invalid request" : "Unauthorized",
+      access.status,
     );
   }
 
-  const channelName = `room:${roomId}`;
+  const channelName = `room:${access.roomId}`;
   const rest = new Ably.Rest({ key: apiKey });
   const tokenRequest = await rest.auth.createTokenRequest({
-    clientId,
+    clientId: access.clientId,
     ttl: 60 * 60 * 1000,
     capability: JSON.stringify({
       [channelName]: ["publish", "subscribe", "presence"],
@@ -41,4 +66,16 @@ export async function GET(request: NextRequest) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function jsonError(error: string, status: number) {
+  return NextResponse.json(
+    { error },
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    },
+  );
 }

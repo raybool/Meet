@@ -41,7 +41,13 @@ type AblyChannel = ReturnType<AblyRealtimeClient["channels"]["get"]>;
 
 const CLIENT_ID_KEY = "meet-client-id";
 
-export function RoomClient({ roomId }: { roomId: string }) {
+export function RoomClient({
+  inviteToken,
+  roomId,
+}: {
+  inviteToken: string;
+  roomId: string;
+}) {
   const [clientId, setClientId] = useState<string | null>(null);
   const [status, setStatus] = useState<CallStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +84,23 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }, []);
 
   useEffect(() => {
-    setInviteUrl(`${window.location.origin}/room/${roomId}`);
-  }, [roomId]);
+    const nextInviteUrl = new URL(`/room/${roomId}`, window.location.origin);
+
+    if (inviteToken) {
+      nextInviteUrl.searchParams.set("token", inviteToken);
+    }
+
+    setInviteUrl(nextInviteUrl.toString());
+  }, [inviteToken, roomId]);
+
+  useEffect(() => {
+    if (!inviteToken) {
+      setError(
+        "Invite token is missing. Create a new room and use the full invite link.",
+      );
+      setStatus("error");
+    }
+  }, [inviteToken]);
 
   useEffect(() => {
     if (localVideoRef.current) {
@@ -371,7 +392,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }, [closePeerConnection, publishSignal, stopLocalMedia]);
 
   const joinRoom = useCallback(async () => {
-    if (!clientId || isJoiningRef.current) {
+    if (!clientId || !inviteToken || isJoiningRef.current) {
       return;
     }
 
@@ -395,7 +416,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
       setStatus("connecting");
 
       const iceResponse = await fetch(
-        `/api/ice?clientId=${encodeURIComponent(clientId)}`,
+        `/api/ice?roomId=${encodeURIComponent(roomId)}&clientId=${encodeURIComponent(
+          clientId,
+        )}&token=${encodeURIComponent(inviteToken)}`,
         { cache: "no-store" },
       );
 
@@ -409,7 +432,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
       const realtime = new Ably.Realtime({
         authUrl: `/api/ably-token?roomId=${encodeURIComponent(
           roomId,
-        )}&clientId=${encodeURIComponent(clientId)}`,
+        )}&clientId=${encodeURIComponent(clientId)}&token=${encodeURIComponent(
+          inviteToken,
+        )}`,
         authMethod: "GET",
         clientId,
       });
@@ -454,6 +479,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
     clientId,
     closePeerConnection,
     handleSignal,
+    inviteToken,
     refreshPresence,
     roomId,
     startPresenceHeartbeat,
@@ -648,7 +674,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                 <button
                   type="button"
                   onClick={joinRoom}
-                  disabled={!clientId}
+                  disabled={!clientId || !inviteToken}
                   className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[8px] bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-70"
                 >
                   <Video aria-hidden="true" className="h-5 w-5" />

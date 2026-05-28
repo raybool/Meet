@@ -13,14 +13,25 @@ npm run dev
 Required environment variables:
 
 - `ABLY_API_KEY`
+- `INVITE_SIGNING_SECRET`
 - `TURN_URLS`
 - `TURN_SHARED_SECRET`
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
 
 Optional:
 
 - `STUN_URLS`
 
-`TURN_SHARED_SECRET` must match your TURN server's static auth secret. The browser receives only short-lived generated TURN credentials, never the shared secret.
+`INVITE_SIGNING_SECRET` should be a long random value. It signs room invite URLs for 24 hours. `TURN_SHARED_SECRET` must match your TURN server's static auth secret. The browser receives only short-lived generated TURN credentials, never the shared secret.
+
+Rooms must be created through `/api/rooms`. The app returns invite links like `/room/{roomId}?token={signedInviteToken}`. `/api/ably-token` and `/api/ice` reject requests without a valid token.
+
+Upstash Redis is used for serverless rate limiting:
+
+- `/api/rooms`: 10 requests per minute per IP.
+- `/api/ably-token`: 30 requests per minute per IP and room.
+- `/api/ice`: 20 requests per minute per IP and room.
 
 ## Ably setup
 
